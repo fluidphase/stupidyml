@@ -1,0 +1,70 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract project.zip
+        run: |
+          set -e
+          test -f project.zip || { echo "project.zip not found in repo root"; exit 1; }
+          rm -rf _src && mkdir _src
+          unzip -q project.zip -d _src
+          SETTINGS=$(find _src -maxdepth 3 -name settings.gradle.kts | head -n1)
+          [ -n "$SETTINGS" ] || { echo "settings.gradle.kts not found in zip"; exit 1; }
+          echo "PROJECT_DIR=$(dirname "$SETTINGS")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
+
+      - name: Report compile errors
+        if: failure()
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          {
+            echo '## Build errors'
+            echo '```'
+            grep -E "^e: |What went wrong|error:|Execution failed" -A3 build.log | sed 's#file:///home/runner/work/[^/]*/[^/]*/_src/##' | head -n 120
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^e: " build.log | sed 's#file:///home/runner/work/[^/]*/[^/]*/_src/##' | head -n 10 | while IFS= read -r l; do
+            l="${l//%/%25}"
+            echo "::error::$l"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MagicLauncher-debug-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+```[cite: 2]
+
+### What changed:
+* Added `android-actions/setup-android@v3` to correctly download and manage the Android SDK environment and command-line tools automatically.
+* Upgraded `actions/setup-java@v4` to `v5` to prevent deprecation warnings.
+* Simplified the license acceptance script to use the freshly set up path safely.
